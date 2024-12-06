@@ -3,101 +3,173 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MEKALSUTA's Dental Clinic - Video Call</title>
+    <title>Dental Clinic Video Consultation</title>
     <style>
-        /* General Reset */
         body {
-            margin: 0;
-            padding: 0;
             font-family: Arial, sans-serif;
-            background-color: #f9f9f9;
+            text-align: center;
+            background-color: #f4f4f4;
             color: #333;
         }
-
-        /* Header */
         h1 {
-            text-align: center;
-            margin: 20px 0;
-            color: #0066cc;
+            color: #009688;
+            margin-top: 20px;
         }
-
-        /* Video Container */
-        .video-container {
+        #video-container {
+            margin-top: 20px;
             display: flex;
             justify-content: center;
             align-items: center;
-            flex-wrap: wrap;
             gap: 20px;
-            margin: 20px;
-            padding: 10px;
-            background: #ffffff;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
-
         video {
-            width: 600px;
-            height: 300px;
-            background-color: #000;
-            border-radius: 10px;
-            border: 2px solid #0066cc;
+            width: 45%;
+            margin: 0 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
         }
-
-        #localVideo {
-            transform: scaleX(-1); /* Mirror the local video */
-        }
-
-        /* Controls */
-        .controls {
-            display: flex;
-            justify-content: center;
+        #message {
             margin-top: 20px;
+            font-size: 1.5em;
+            color: #555;
         }
-
-        button {
-            background-color: #0066cc;
+        .cta-button {
+            background-color: #009688;
             color: white;
             padding: 10px 20px;
-            font-size: 16px;
             border: none;
             border-radius: 5px;
             cursor: pointer;
-            transition: background-color 0.3s ease;
-        }
-
-        button:hover {
-            background-color: #004d99;
-        }
-
-        button:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-
-        /* Footer */
-        footer {
-            text-align: center;
+            font-size: 1.2em;
             margin-top: 30px;
-            font-size: 14px;
-            color: #777;
+        }
+        .cta-button:hover {
+            background-color: #00796b;
         }
     </style>
 </head>
 <body>
-    <h1>Welcome to MEKALSUTA's Dental Clinic Video Call</h1>
+    <h1>Welcome to Our Dental Clinic</h1>
+    <p>Join our video consultation for your dental needs. Please wait while we connect you to a dentist.</p>
 
-    <div class="video-container">
+    <div id="message">Connecting you to a dentist...</div>
+
+    <div id="video-container">
         <video id="localVideo" autoplay playsinline muted></video>
         <video id="remoteVideo" autoplay playsinline></video>
     </div>
 
+    <button class="cta-button" onclick="startCall()">Start Video Consultation</button>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    <script>
+        const socket = io.connect(); // Connect to the server
+        let localStream;
+        let peerConnection;
 
-    <footer>
-        © 2024 MEKALSUTA's Dental Clinic. All Rights Reserved.
-    </footer>
+        // Configuration for WebRTC STUN server
+        const configuration = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        };
 
-    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
-    <script src="/static/main.js"></script>
+        // Generate a random user ID
+        const userId = Math.random().toString(36).substring(7);
+        socket.emit('join', { user_id: userId });
+
+        // Request media stream (camera and microphone)
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+            .then(stream => {
+                localStream = stream;
+                document.getElementById('localVideo').srcObject = stream;
+            })
+            .catch(error => {
+                console.error('Error accessing media devices.', error);
+                document.getElementById('message').innerText = 'Error accessing media devices.';
+            });
+
+        // Handle matching with a dentist
+        socket.on('match', function(data) {
+            const matchedUserId = data.user_id;
+            document.getElementById('message').innerText = `You are connected with Dr. ${matchedUserId}`;
+            startCall(matchedUserId);
+        });
+
+        // Handle no users available
+        socket.on('no_users', function(message) {
+            document.getElementById('message').innerText = message;
+        });
+
+        // WebRTC connection setup
+        function startCall(remoteUserId) {
+            peerConnection = new RTCPeerConnection(configuration);
+
+            // Add local stream to the peer connection
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            // Create an offer and send to the remote peer via signaling server (Socket.io)
+            peerConnection.createOffer()
+                .then(offer => {
+                    peerConnection.setLocalDescription(offer);
+                    socket.emit('offer', { offer: offer, to: remoteUserId });
+                })
+                .catch(error => console.error('Error creating offer:', error));
+
+            // Handle ICE candidates
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', { candidate: event.candidate, to: remoteUserId });
+                }
+            };
+
+            // Display remote stream when received
+            peerConnection.ontrack = event => {
+                document.getElementById('remoteVideo').srcObject = event.streams[0];
+            };
+        }
+
+        // Receive an offer from another user
+        socket.on('offer', function(data) {
+            const remoteUserId = data.from;
+            peerConnection = new RTCPeerConnection(configuration);
+
+            // Add local stream to the peer connection
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            // Set the received offer as remote description
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
+                .then(() => {
+                    return peerConnection.createAnswer();
+                })
+                .then(answer => {
+                    peerConnection.setLocalDescription(answer);
+                    socket.emit('answer', { answer: answer, to: remoteUserId });
+                })
+                .catch(error => console.error('Error receiving offer:', error));
+
+            // Handle ICE candidates
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', { candidate: event.candidate, to: remoteUserId });
+                }
+            };
+
+            // Display remote stream when received
+            peerConnection.ontrack = event => {
+                document.getElementById('remoteVideo').srcObject = event.streams[0];
+            };
+        });
+
+        // Receive an answer from the remote peer
+        socket.on('answer', function(data) {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer))
+                .catch(error => console.error('Error setting remote description:', error));
+        });
+
+        // Handle ICE candidates from the other peer
+        socket.on('ice-candidate', function(data) {
+            peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate))
+                .catch(error => console.error('Error adding received ICE candidate:', error));
+        });
+    </script>
 </body>
 </html>
