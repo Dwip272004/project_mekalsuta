@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: mekalsuta-dental-clinic
+    env: python
+    plan: free
+    region: oregon  # Change to your preferred region, e.g., 'oregon', 'singapore'
+    buildCommand: |
+      pip install -r requirements.txt
+    startCommand: |
+      gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: SECRET_KEY
+        value: "your-secret-key-here"
+    staticPublish:
+      - path: /static
+        dest: static/
+    disk:
+      - name: persistent-data
+        mountPath: /var/data
