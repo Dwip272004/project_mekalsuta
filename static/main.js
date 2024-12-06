@@ -1,57 +1,38 @@
-const socket = io.connect(window.location.origin);
-const localVideo = document.getElementById('localVideo');
-const remoteVideo = document.getElementById('remoteVideo');
-const startCallButton = document.getElementById('startCall');
-const endCallButton = document.getElementById('endCall');
-let localStream, peerConnection;
+const socket = io(); // Connect to the signaling server
+
+let localStream;
+let peerConnection;
 const config = {
     iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'turn:your-turn-server.com', username: 'user', credential: 'pass' }
+        { urls: 'stun:stun.l.google.com:19302' } // Public STUN server
     ]
 };
 
+const localVideo = document.getElementById('localVideo');
+const remoteVideo = document.getElementById('remoteVideo');
 
+// Get local media (camera & microphone)
 navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-    .then(stream => {
-        localVideo.srcObject = stream;
+    .then((stream) => {
         localStream = stream;
+        localVideo.srcObject = stream;
+
+        // Automatically create a peer connection and start signaling
+        createPeerConnection();
+        localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
+    })
+    .catch((error) => {
+        console.error('Error accessing media devices:', error);
     });
 
-    socket.on('message', async (message) => {
-        console.log('Received message:', message); // Debug
-        if (message.type === 'offer') {
-            console.log('Received offer');
-            createPeerConnection();
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(message));
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            socket.emit('message', peerConnection.localDescription);
-        } else if (message.type === 'answer') {
-            console.log('Received answer');
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(message));
-        } else if (message.type === 'candidate') {
-            console.log('Received ICE candidate');
-            const candidate = new RTCIceCandidate(message.candidate);
-            await peerConnection.addIceCandidate(candidate);
-        }
-    });
-    
-
+// Create peer connection and set up event handlers
 function createPeerConnection() {
     peerConnection = new RTCPeerConnection(config);
 
-    // Handle new tracks
+    // Handle incoming remote media streams
     peerConnection.ontrack = (event) => {
-        console.log('Remote track received', event);
-        remoteVideo.srcObject = event.streams[0]; // Attach remote stream
+        remoteVideo.srcObject = event.streams[0];
     };
-
-    // Add local tracks
-    localStream.getTracks().forEach((track) => {
-        console.log('Adding local track:', track);
-        peerConnection.addTrack(track, localStream);
-    });
 
     // Handle ICE candidates
     peerConnection.onicecandidate = ({ candidate }) => {
@@ -61,21 +42,33 @@ function createPeerConnection() {
     };
 }
 
+// Handle signaling messages
+socket.on('message', async (message) => {
+    console.log('Received message:', message);
 
-async function startCall() {
-    startCallButton.disabled = true;
-    endCallButton.disabled = false;
-    createPeerConnection();
+    if (message.type === 'offer') {
+        // Handle incoming offer
+        if (!peerConnection) createPeerConnection();
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(message));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit('message', peerConnection.localDescription);
+    } else if (message.type === 'answer') {
+        // Handle incoming answer
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(message));
+    } else if (message.type === 'candidate') {
+        // Add incoming ICE candidate
+        const candidate = new RTCIceCandidate(message.candidate);
+        await peerConnection.addIceCandidate(candidate);
+    }
+});
+
+// Automatically start the call by sending an offer
+socket.on('connect', async () => {
+    if (!peerConnection) createPeerConnection();
+
+    // Create and send an offer when the user connects
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
     socket.emit('message', peerConnection.localDescription);
-}
-
-function endCall() {
-    peerConnection.close();
-    peerConnection = null;
-    startCallButton.disabled = false;
-    endCallButton.disabled = true;
-    remoteVideo.srcObject = null;
-    alert('Call ended!');
-}
+});
